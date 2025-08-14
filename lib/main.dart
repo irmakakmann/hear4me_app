@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'sounds.dart';
+import 'setup.dart';
 
 void main() {
   runApp(const MyApp());
@@ -59,7 +60,7 @@ class _MyHomePageState extends State<MyHomePage> {
       SoundsScreen(),
       const Center(child: Text('History Screen Content', style: TextStyle(fontSize: 24))),
       const Center(child: Text('Profile Screen Content', style: TextStyle(fontSize: 24))),
-      const Center(child: Text('Settings Screen Content', style: TextStyle(fontSize: 24))),
+      const SetupScreen(),
     ];
   }
 
@@ -69,7 +70,7 @@ class _MyHomePageState extends State<MyHomePage> {
     'Sounds',       // Title for Sounds (index 1)
     'History',      // Title for History (index 2)
     'Profile',      // Title for Profile (index 3)
-    'Settings',     // Title for Settings (index 4)
+    'setup',     // Title for Settings (index 4)
   ];
 
   @override
@@ -103,8 +104,8 @@ class _MyHomePageState extends State<MyHomePage> {
             label: 'Profile',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: 'Settings',
+            icon: Icon(Icons.bar_chart),
+            label: 'Setup',
           ),
         ],
         currentIndex: _selectedIndex,
