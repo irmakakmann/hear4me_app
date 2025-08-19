@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'sounds.dart';
 import 'settings.dart';
+import 'history.dart';
 
 void main() {
   runApp(const MyApp());
@@ -67,7 +68,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return <Widget>[
       _buildHomeContent(context),
       SoundsScreen(),
-      const Center(child: Text('History Screen Content', style: TextStyle(fontSize: 24))),
+      HistoryScreen(),
       const Center(child: Text('Profile Screen Content', style: TextStyle(fontSize: 24))),
       const SettingsScreen(),
     ];
@@ -75,11 +76,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
   // --- List of AppBar Titles for each Tab ---
   static const List<String> _appBarTitles = <String>[
-    'Hear4Me',      // Home
-    'Sounds',       // Sounds
-    'History',      // History
-    'Profile',      // Profile
-    'Settings',     // Settings
+    'Hear4Me',
+    'Sounds',
+    'History',
+    'Profile',
+    'Settings',
   ];
 
   @override
@@ -211,9 +212,9 @@ class SoundLevelCard extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade300, width: 2),
       ),
       width: double.infinity,
-      height: 400, // gives vertical space for centering
+      height: 400,
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center, // centers vertically
+        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const Text(
