@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'sounds.dart';
 import 'settings.dart';
 import 'history.dart';
+import 'profile.dart';
 
 void main() {
   runApp(const MyApp());
@@ -69,8 +70,8 @@ class _MyHomePageState extends State<MyHomePage> {
       _buildHomeContent(context),
       SoundsScreen(),
       HistoryScreen(),
-      const Center(child: Text('Profile Screen Content', style: TextStyle(fontSize: 24))),
-      const SettingsScreen(),
+      ProfileScreen(),
+      SettingsScreen(),
     ];
   }
 
