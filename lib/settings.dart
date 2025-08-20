@@ -433,15 +433,6 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
       backgroundColor: Colors.grey.shade100,
       body: Column(
         children: [
-          //Blue header section
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            decoration: const BoxDecoration(color: Colors.blue),
-            alignment: Alignment.center,
-            child: const Text('Connect Watch', style: _headerStyle),
-          ),
-
           //Content section
           Expanded(
             child: SingleChildScrollView(
