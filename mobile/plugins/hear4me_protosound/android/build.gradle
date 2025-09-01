@@ -1,0 +1,64 @@
+group = "com.hear4me.hear4me_protosound"
+version = "1.0-SNAPSHOT"
+
+buildscript {
+    ext.kotlin_version = "2.1.0"
+    repositories { google(); mavenCentral() }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.7.3")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+allprojects {
+    repositories { google(); mavenCentral() }
+}
+
+android {
+    namespace = "com.hear4me.hear4me_protosound"
+    compileSdk = 35
+
+    defaultConfig {
+        minSdk = 24   // <-- IMPORTANT (was 21)
+        consumerProguardFiles("consumer-rules.pro")
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    kotlinOptions { jvmTarget = JavaVersion.VERSION_11 }
+
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
+        test.java.srcDirs += "src/test/kotlin"
+        // assets/ will be picked up automatically if it exists at src/main/assets
+    }
+
+    testOptions {
+        unitTests.all {
+            useJUnitPlatform()
+            testLogging {
+                events "passed", "skipped", "failed", "standardOut", "standardError"
+                outputs.upToDateWhen { false }
+                showStandardStreams = true
+            }
+        }
+    }
+
+    // Optional but helpful: only package common ABIs to cut APK size
+    // ndk { abiFilters "armeabi-v7a", "arm64-v8a" }
+}
+
+// ---- TOP-LEVEL dependencies (not inside android {}) ----
+dependencies {
+    // PyTorch Mobile Lite
+    implementation "org.pytorch:pytorch_android_lite:1.13.1"
+    implementation "org.pytorch:pytorch_android_torchvision_lite:1.13.1"
+
+    testImplementation("org.jetbrains.kotlin:kotlin-test")
+    testImplementation("org.mockito:mockito-core:5.0.0")
+}
