@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>We use Bluetooth to receive audio from your watch.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>We use the microphone to detect important sounds for you.</string>
 	<key>CFBundleDevelopmentRegion</key>

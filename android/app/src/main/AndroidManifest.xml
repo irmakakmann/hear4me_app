@@ -2,7 +2,14 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <application
+    <!-- Android 12+ BLE permissions -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <!-- For pre-12 scanning: -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <application>
         android:label="hear4me"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
@@ -33,7 +40,7 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-    </application>
+        </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
          https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
