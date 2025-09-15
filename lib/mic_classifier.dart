@@ -7,7 +7,7 @@ import 'package:flutter_audio_capture/flutter_audio_capture.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'audio_classifier.dart';
-import 'labels.dart'; // uses soundLabels
+import 'labels.dart';
 
 class MicClassifierPage extends StatefulWidget {
   const MicClassifierPage({super.key});
@@ -16,25 +16,20 @@ class MicClassifierPage extends StatefulWidget {
 }
 
 class _MicClassifierPageState extends State<MicClassifierPage> {
-  // mic + model
   final _cap = FlutterAudioCapture();
   final _clf = AudioClassifier();
 
-  // state
   bool _ready = false;
   bool _listening = false;
-  bool _busy = false; // avoid overlapping classify ticks
+  bool _busy = false;
   Timer? _hopTimer;
 
-  // audio ring-buffer (keep ~5s max)
   final List<int> _mono16 = <int>[];
-  int _deviceSampleRate = 0; // actual mic SR we’ll resample from
+  int _deviceSampleRate = 0;
 
-  // ui/debug
   int _chunks = 0;
   String _info = '';
 
-  // results
   String? _label;
   double? _score;
   List<MapEntry<String, double>> _topK = const [];
@@ -52,7 +47,6 @@ class _MicClassifierPageState extends State<MicClassifierPage> {
   }
 
   Future<void> _init() async {
-    // 1) mic permission
     final status = await Permission.microphone.request();
     if (!status.isGranted) {
       if (mounted) {
@@ -62,19 +56,17 @@ class _MicClassifierPageState extends State<MicClassifierPage> {
       }
       return;
     }
-
     try {
-      // 2) init plugin (required) + load model
-      await _cap.init();
-      await _clf.load();
-
+      await _cap.init();     // required
+      await _clf.load();     // loads model, prepares frontend
       if (!mounted) return;
       setState(() => _ready = true);
     } catch (e, st) {
       debugPrint('[InitError] $e\n$st');
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Init failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Init failed: $e')),
+      );
     }
   }
 
@@ -83,53 +75,44 @@ class _MicClassifierPageState extends State<MicClassifierPage> {
 
     const requestedRate = 16000;
 
-    void onAudio(dynamic obj) {
-      // plugin delivers Float32 samples [-1,1]
-      Float32List f32;
-      if (obj is Float32List) {
-        f32 = obj;
-      } else if (obj is List) {
-        f32 = Float32List.fromList(obj.cast<double>());
-      } else {
-        debugPrint('[AUDIO] Unknown buffer type: ${obj.runtimeType}');
-        return;
-      }
-
-      // Float32 -> Int16
-      final i16 = Int16List(f32.length);
-      for (var i = 0; i < f32.length; i++) {
-        final s = (f32[i] * 32767.0).clamp(-32768.0, 32767.0);
-        i16[i] = s.toInt();
-      }
-
-      // Resample to 16k if mic SR isn’t 16k
-      final List<int> mono16;
-      if (_deviceSampleRate == 0 || _deviceSampleRate == requestedRate) {
-        mono16 = i16;
-      } else {
-        mono16 = _resampleI16Nearest(i16, _deviceSampleRate, requestedRate);
-      }
-
-      _mono16.addAll(mono16);
-      if (_mono16.length > 80000) {
-        _mono16.removeRange(0, _mono16.length - 80000); // cap ~5s
-      }
-
-      // debug heartbeat
-      _chunks++;
-      if (_chunks % 10 == 0) {
-        _info = 'chunks=$_chunks len=${f32.length} sr=$_deviceSampleRate';
-        if (mounted) setState(() {});
-      }
-    }
-
     void onError(Object e) {
       debugPrint('[AUDIO] Error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Audio error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Audio error: $e')),
+        );
       }
       _stopListening();
+    }
+
+    void onAudio(dynamic obj) {
+      // plugin delivers Float32 samples [-1,1]
+      Float32List f32 = (obj is Float32List)
+          ? obj
+          : Float32List.fromList((obj as List).cast<double>());
+
+      // High-quality resample on Float32 first
+      final f32_16k = (_deviceSampleRate == 0 || _deviceSampleRate == requestedRate)
+          ? f32
+          : _resampleF32Linear(f32, _deviceSampleRate, requestedRate);
+
+      // Then convert to Int16
+      final i16 = Int16List(f32_16k.length);
+      for (var i = 0; i < f32_16k.length; i++) {
+        final s = (f32_16k[i] * 32767.0).clamp(-32768.0, 32767.0);
+        i16[i] = s.toInt();
+      }
+
+      _mono16.addAll(i16);
+      if (_mono16.length > 80000) {
+        _mono16.removeRange(0, _mono16.length - 80000); // ~5s cap
+      }
+
+      _chunks++;
+      if (_chunks % 10 == 0 && mounted) {
+        _info = 'chunks=$_chunks len=${f32.length} sr=$_deviceSampleRate';
+        setState(() {});
+      }
     }
 
     try {
@@ -137,21 +120,22 @@ class _MicClassifierPageState extends State<MicClassifierPage> {
         onAudio,
         onError,
         sampleRate: requestedRate, // device may ignore this
-        bufferSize: 4096,          // larger buffer = fewer dropouts
+        bufferSize: 4096,          // larger buffer reduces dropouts
       );
 
-      // Many devices (esp. Huawei) actually record at 48k or 44.1k.
-      // Force one to engage our resampler path. Try 48000 first.
-      _deviceSampleRate = 48000;
-      // _deviceSampleRate = 44100; // try this instead if needed
+      // Try true 16k first; if results are weird, try forcing 48000 or 44100:
+      _deviceSampleRate = requestedRate;
+      // _deviceSampleRate = 48000;
+      // _deviceSampleRate = 44100;
 
-      _startLoop(); // begin periodic classification
+      _startLoop();
       setState(() => _listening = true);
     } catch (e) {
       debugPrint('[AUDIO] Start failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Start mic failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Start mic failed: $e')),
+        );
       }
       _stopListening();
     }
@@ -174,9 +158,7 @@ class _MicClassifierPageState extends State<MicClassifierPage> {
     _hopTimer?.cancel();
     _hopTimer = null;
     if (_listening) {
-      try {
-        await _cap.stop();
-      } catch (_) {}
+      try { await _cap.stop(); } catch (_) {}
     }
     if (mounted) setState(() => _listening = false);
   }
@@ -187,37 +169,55 @@ class _MicClassifierPageState extends State<MicClassifierPage> {
 
     final frame = _mono16.sublist(_mono16.length - win);
 
-    // Optional light gate (tune or comment out)
-    final rms = math.sqrt(
-      frame.fold<double>(0, (a, x) => a + (x * x)) / frame.length,
-    );
-    if (rms < 50) return;
+    // Stronger silence gate avoids random Speech in quiet
+    final rms = math.sqrt(frame.fold<double>(0, (a, x) => a + (x * x)) / frame.length);
+    if (rms < 60) return;
 
     final res = _clf.infer(frame);
-    final score = (res['score'] as num).toDouble();
     final probs = (res['probs'] as Map<String, double>);
     final entries = probs.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    // Optional confidence gate
-    if (score < 0.2) return;
+    var top = entries[0];
+    final second = entries.length > 1 ? entries[1] : top;
+
+    // Anti-speech rule: if Speech barely wins, prefer runner-up
+    const double speechHardMin = 0.60;  // require ≥0.60 to trust Speech
+    const double minSecond = 0.25;      // runner-up must be at least this
+    const double margin = 0.15;         // Speech must beat runner-up by this
+
+    if (top.key == 'Speech') {
+      final speechStrong = top.value >= speechHardMin;
+      final runnerViable = second.value >= minSecond;
+      final notByMuch = (top.value - second.value) < margin;
+      if (!speechStrong && runnerViable && notByMuch) {
+        top = second;
+      }
+    }
+
+    // Light confidence gate (post-reweight)
+    if (top.value < 0.18) return;
 
     setState(() {
-      _label = res['label'] as String;
-      _score = score;
+      _label = top.key;
+      _score = top.value;
       _topK = entries.take(5).toList();
     });
   }
 
-  // Fast nearest-neighbor resample int16
-  List<int> _resampleI16Nearest(List<int> input, int inSr, int outSr) {
+  // Linear resample Float32 -> Float32
+  Float32List _resampleF32Linear(Float32List input, int inSr, int outSr) {
     if (inSr == outSr) return input;
-    final ratio = outSr / inSr;
-    final outLen = (input.length * ratio).floor();
-    final out = List<int>.filled(outLen, 0);
-    for (var i = 0; i < outLen; i++) {
-      final src = (i / ratio).round().clamp(0, input.length - 1);
-      out[i] = input[src];
+    final outLen = (input.length * outSr / inSr).floor();
+    final out = Float32List(outLen);
+    final step = inSr / outSr;
+    double src = 0.0;
+    for (int i = 0; i < outLen; i++) {
+      final i0 = src.floor();
+      final i1 = (i0 + 1 < input.length) ? i0 + 1 : i0;
+      final frac = src - i0;
+      out[i] = input[i0] * (1.0 - frac) + input[i1] * frac;
+      src += step;
     }
     return out;
   }

@@ -6,6 +6,9 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'labels.dart';
 
+/// Supports:
+///  • waveform: [1,16000] or [1,16000,1]  (1s @16k PCM -> float32 [-1,1])
+///  • log-mel:  [1,96,64,1]               (96 frames × 64 bins)
 class AudioClassifier {
   final int sampleRate = 16000;
   final int windowSize = 16000; // 1s @ 16k
@@ -25,9 +28,20 @@ class AudioClassifier {
   late final Float32List _hann;                 // length 400
   late final List<Float32List> _melBank;        // 64 × _nSpec
 
-  // EMA smoothing
-  final double emaAlpha = 0.2; // was 0.6; make it snappy
+  // EMA smoothing (lower = snappier)
+  final double emaAlpha = 0.2;
   Float32List? _emaProbs;
+
+  // Reweight some classes to reduce Speech bias (tune as needed)
+  final Map<String, double> _classScale = const {
+    'Speech': 0.35,            // suppress speech dominance
+    'Dog Bark': 1.15,
+    'Cat Meow': 1.15,
+    'Coughing': 1.15,
+    'Baby Cry': 1.25,
+    'Fire/Smoke Alarm': 1.40,
+    'Doorbell': 1.20,
+  };
 
   Future<void> load() async {
     final data = await rootBundle.load('assets/example_model.tflite');
@@ -42,18 +56,13 @@ class AudioClassifier {
     _outShape = _interpreter.getOutputTensor(0).shape;
 
     _expectsLogMel = (_inShape.length == 4 &&
-        _inShape[0] == 1 &&
-        _inShape[1] == 96 &&
-        _inShape[2] == 64 &&
-        _inShape[3] == 1);
+        _inShape[0] == 1 && _inShape[1] == 96 && _inShape[2] == 64 && _inShape[3] == 1);
 
     if (!(_outShape.length == 2 && _outShape.first == 1)) {
       throw StateError('Model output must be [1, numLabels], got $_outShape');
     }
     if (_outShape.last != soundLabels.length) {
-      throw StateError(
-        'labels.txt count (${soundLabels.length}) does not match model output size (${_outShape.last}).',
-      );
+      throw StateError('labels count (${soundLabels.length}) != model output ${_outShape.last}');
     }
 
     final inType = _interpreter.getInputTensor(0).type;
@@ -77,23 +86,17 @@ class AudioClassifier {
       throw ArgumentError('Expected $windowSize samples, got ${framePcm16.length}');
     }
 
-    final floats = Float32List.fromList(
-      framePcm16.map((s) => s / 32768.0).toList(),
-    );
+    final floats = Float32List.fromList(framePcm16.map((s) => s / 32768.0).toList());
 
     Object input;
     if (_expectsLogMel) {
-      final spec = _computeLogMel96x64(floats); // Float32List[96][64]
-      final withChannel = spec
-          .map((row) => row.map((v) => [v.toDouble()]).toList())
-          .toList();
-      input = [withChannel];
+      final spec = _computeLogMel96x64(floats); // [96][64]
+      final withChannel = spec.map((row) => row.map((v) => [v]).toList()).toList(); // [96][64][1]
+      input = [withChannel]; // [1][96][64][1]
     } else if (_inShape.length == 2 && _inShape[0] == 1 && _inShape[1] == windowSize) {
       input = [floats.toList()];
     } else if (_inShape.length == 3 &&
-        _inShape[0] == 1 &&
-        _inShape[1] == windowSize &&
-        _inShape[2] == 1) {
+        _inShape[0] == 1 && _inShape[1] == windowSize && _inShape[2] == 1) {
       input = [floats.map((f) => [f]).toList()];
     } else {
       throw StateError('Unexpected input shape: $_inShape.');
@@ -108,6 +111,9 @@ class AudioClassifier {
     probs = _ema(_emaProbs, probs, emaAlpha);
     _emaProbs = Float32List.fromList(probs);
 
+    // De-bias by label, then renormalize
+    probs = _reweightByLabel(probs);
+
     final topIdx = _argmax(probs);
     return {
       'label': soundLabels[topIdx],
@@ -120,11 +126,9 @@ class AudioClassifier {
   // ---------- fast log-mel using cached window + mel bank ----------
 
   List<List<double>> _computeLogMel96x64(Float32List x) {
-    // Reusable buffers
     final re = Float32List(_nFft);
     final im = Float32List(_nFft);
 
-    // 96 frames ending near the buffer end
     final frames = List.generate(96, (_) => Float32List(_nSpec));
     final lastStart = x.length - _winLength;
     int start = lastStart - (95 * _hopLength);
@@ -133,7 +137,6 @@ class AudioClassifier {
     for (int f = 0; f < 96; f++) {
       final s0 = start + f * _hopLength;
 
-      // window
       re.fillRange(0, re.length, 0.0);
       im.fillRange(0, im.length, 0.0);
       for (int i = 0; i < _winLength; i++) {
@@ -150,13 +153,12 @@ class AudioClassifier {
       }
     }
 
-    // Apply mel bank: [96,_nSpec] -> [96,_nMels]
     final mel = List.generate(96, (_) => List<double>.filled(_nMels, 0.0));
     for (int t = 0; t < 96; t++) {
+      final frame = frames[t];
       for (int m = 0; m < _nMels; m++) {
         double s = 0.0;
         final filt = _melBank[m];
-        final frame = frames[t];
         for (int k = 0; k < _nSpec; k++) {
           s += frame[k] * filt[k];
         }
@@ -166,9 +168,7 @@ class AudioClassifier {
       }
     }
 
-    // Per-frequency (column) normalization — helps model alignment
-    _perFreqNormalize(mel);
-
+    _perFreqNormalize(mel); // helps align with many training pipelines
     return mel;
   }
 
@@ -194,16 +194,14 @@ class AudioClassifier {
     final filters = List.generate(nMels, (_) => Float32List(nSpec));
 
     for (int m = 1; m <= nMels; m++) {
-      final f0 = bin[m - 1].clamp(0, nSpec - 1);
-      final f1 = bin[m].clamp(0, nSpec - 1);
-      final f2 = bin[m + 1].clamp(0, nSpec - 1);
+      final f0 = bin[m - 1].clamp(0, nSpec - 1).toInt();
+      final f1 = bin[m].clamp(0, nSpec - 1).toInt();
+      final f2 = bin[m + 1].clamp(0, nSpec - 1).toInt();
 
-      // rise
       final denomRise = (f1 - f0).abs() + 1e-9;
       for (int k = f0; k <= f1; k++) {
         filters[m - 1][k] = ((k - f0) / denomRise).toDouble();
       }
-      // fall
       final denomFall = (f2 - f1).abs() + 1e-9;
       for (int k = f1; k <= f2; k++) {
         filters[m - 1][k] = ((f2 - k) / denomFall).toDouble();
@@ -217,13 +215,41 @@ class AudioClassifier {
     final M = mel[0].length;
     for (int m = 0; m < M; m++) {
       double mean = 0.0;
-      for (int t = 0; t < T; t++) { mean += mel[t][m]; }
+      for (int t = 0; t < T; t++) mean += mel[t][m];
       mean /= T;
       double sumSq = 0.0;
-      for (int t = 0; t < T; t++) { final d = mel[t][m] - mean; sumSq += d * d; }
+      for (int t = 0; t < T; t++) {
+        final d = mel[t][m] - mean; sumSq += d * d;
+      }
       final std = math.sqrt(sumSq / T + 1e-9);
-      for (int t = 0; t < T; t++) { mel[t][m] = (mel[t][m] - mean) / std; }
+      for (int t = 0; t < T; t++) {
+        mel[t][m] = (mel[t][m] - mean) / std;
+      }
     }
+  }
+
+  // Reweight per label + optionally ban some labels, then renormalize
+  List<double> _reweightByLabel(List<double> probs) {
+    // Banlist: anything here gets probability 0.0
+    const banned = {'Speech'}; // ← hard-ban Speech
+
+    final scaled = List<double>.from(probs);
+    double sum = 0.0;
+    for (int i = 0; i < scaled.length; i++) {
+      final lbl = soundLabels[i];
+      final bool isBanned = banned.contains(lbl);
+      final mult = isBanned ? 0.0 : (_classScale[lbl] ?? 1.0);
+      scaled[i] *= mult;
+      sum += scaled[i];
+    }
+
+    // If we zeroed everything (edge case), fall back to original
+    if (sum <= 1e-12) return probs;
+
+    for (int i = 0; i < scaled.length; i++) {
+      scaled[i] /= sum;
+    }
+    return scaled;
   }
 
   // FFT (radix-2, in-place)
@@ -231,7 +257,6 @@ class AudioClassifier {
     final n = re.length;
     if (n == 0) return;
 
-    // bit-reversal
     int j = 0;
     for (int i = 0; i < n; i++) {
       if (i < j) {
