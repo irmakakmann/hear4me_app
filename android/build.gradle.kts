@@ -1,3 +1,11 @@
+plugins {
+    // Pin Android Gradle Plugin to 7.4.2 for old plugins (like tflite_flutter 0.9.x)
+    id("com.android.application") apply false
+    id("com.android.library") apply false
+    // Kotlin plugin version compatible with AGP 7.4.x
+    kotlin("android") apply false
+}
+
 allprojects {
     repositories {
         google()
@@ -5,15 +13,12 @@ allprojects {
     }
 }
 
-val newBuildDir: Directory = rootProject.layout.buildDirectory.dir("../../build").get()
-rootProject.layout.buildDirectory.value(newBuildDir)
-
+// (Optional) If you previously changed build dirs, keep it — otherwise you can drop it.
+val newBuildDir = rootProject.layout.buildDirectory.dir("../../build").get()
+rootProject.layout.buildDirectory.set(newBuildDir)
 subprojects {
-    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
-    project.layout.buildDirectory.value(newSubprojectBuildDir)
-}
-subprojects {
-    project.evaluationDependsOn(":app")
+    layout.buildDirectory.set(newBuildDir.dir(project.name))
+    evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {

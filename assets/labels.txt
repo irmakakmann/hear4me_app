@@ -1,22 +1,30 @@
-Dog_Bark
-Loud_Noise
-Drilling
-Fire_Alarm
-Phone_Ringing
-Speaking
+Dog Bark
+Drill
+Fire/Smoke Alarm
+Phone Ring
+Speech
 Vacuum
-Baby_Crying
+Baby Cry
 Chopping
 Coughing
-Door_In_Use
-Water_Running
+Door In-Use
+Water Running
 Knocking
 Microwave
 Shaver
 Toothbrush
 Blender
-Dish_Washer
+Dishwasher
 Doorbell
-Toilet_Flush
-Hair_Dryer
+Toilet Flush
+Hair Dryer
 Laughing
+Snoring
+Typing
+Hammering
+Car Honk
+Vehicle
+Saw
+Cat Meow
+Alarm Clock
+Utensils and Cutlery
