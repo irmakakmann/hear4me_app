@@ -3,58 +3,95 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:tflite_flutter/tflite_flutter.dart';
+
 import 'labels.dart';
+import 'dsp_frontend.dart';
 
 /// Float32 audio classifier for 1s PCM16 @16kHz.
-/// Expects model input shape [1,16000] or [1,16000,1] and output [1,numLabels].
+/// Supports input [1,16000], [1,16000,1], or spectrogram [1,96,64,1].
 class AudioClassifier {
   final int sampleRate = 16000;
-  final int windowSize = 16000; // 1s at 16kHz
+  final int windowSize = 16000; // 1s @ 16kHz
 
   late final Interpreter _interpreter;
   late final List<int> _inShape;
   late final List<int> _outShape;
+  late final TensorType _inType;
+  late final TensorType _outType;
+
+  // Spectrogram frontend (only used when model needs [1,96,64,1])
+  bool _needsSpectrogram = false;
+  SpectrogramFrontend? _frontend;
 
   // EMA smoothing over successive windows (lower = snappier)
   final double emaAlpha = 0.25;
   Float32List? _emaProbs;
   int _framesSinceReset = 0;
 
-  /// Loads assets/hear4me_model.tflite from bundle and prepares interpreter.
+  /// Loads assets/hear4me_model.tflite and prepares interpreter.
   Future<void> load() async {
+    // Load bytes
     final data = await rootBundle.load('assets/hear4me_model.tflite');
     final bytes = data.buffer.asUint8List();
 
+    // Create interpreter
     _interpreter = await Interpreter.fromBuffer(
       bytes,
       options: InterpreterOptions()..threads = 2,
     );
 
+    // Shapes & types
     _inShape = _interpreter.getInputTensor(0).shape;
     _outShape = _interpreter.getOutputTensor(0).shape;
+    _inType = _interpreter.getInputTensor(0).type;
+    _outType = _interpreter.getOutputTensor(0).type;
 
-    // Validate shapes and types
+    // Sanity checks
     if (!(_outShape.length == 2 && _outShape.first == 1)) {
       throw StateError("Model output must be [1, numLabels], got $_outShape");
     }
     if (_outShape.last != soundLabels.length) {
       throw StateError(
         "Model output ${_outShape.last} != labels ${soundLabels.length}. "
-            "labels.dart list must match the model's output order.",
+            "Update labels.dart to match the model.",
       );
     }
-    final inType = _interpreter.getInputTensor(0).type;
-    final outType = _interpreter.getOutputTensor(0).type;
-    if (inType != TensorType.float32 || outType != TensorType.float32) {
+    if (_inType != TensorType.float32 || _outType != TensorType.float32) {
       throw UnsupportedError(
-        "This helper expects a float32 model. "
-            "Got input=$inType, output=$outType.",
+        "Expected float32 model. Got input=$_inType, output=$_outType.",
       );
     }
+
+    // Detect spectrogram model
+    _needsSpectrogram = _inShape.length == 4 &&
+        _inShape[0] == 1 &&
+        _inShape[1] == 96 &&
+        _inShape[2] == 64 &&
+        _inShape[3] == 1;
+
+    if (_needsSpectrogram) {
+      // Configure the frontend. Start with log-mel (useMFCC=false).
+      // If your accuracy looks off and SoundWatch used MFCCs, flip to true.
+      _frontend = SpectrogramFrontend(
+        sampleRate: sampleRate,
+        fftSize: 512,
+        frameLen: 400,
+        hopLen: 160,
+        nMels: 64,
+        useMFCC: false,
+      );
+    }
+
+    // Helpful log
+    // ignore: avoid_print
+    print('[TFL] model loaded '
+        '(bytes=${bytes.length}) '
+        'in=$_inShape out=$_outShape '
+        'needsSpectrogram=$_needsSpectrogram');
   }
 
   /// Run inference on a 1s PCM16 window (exactly 16000 samples).
-  /// Returns: {label, score, probs (Map<label,double>), index}
+  /// Returns: {label, score, probs(Map<label,double>), index}
   Map<String, dynamic> infer(List<int> framePcm16) {
     if (framePcm16.length != windowSize) {
       throw ArgumentError("Expected $windowSize samples, got ${framePcm16.length}");
@@ -65,7 +102,7 @@ class AudioClassifier {
       framePcm16.map((s) => s / 32768.0).toList(),
     );
 
-    // --- Per-frame standardization (zero-mean, unit-RMS) ---
+    // Per-frame standardization (can disable if your training expected raw)
     double mean = 0;
     for (var i = 0; i < floats.length; i++) mean += floats[i];
     mean /= floats.length;
@@ -79,20 +116,29 @@ class AudioClassifier {
       floats[i] = (floats[i] - mean) / rms;
     }
 
-    // Match input shape: [1,16000] or [1,16000,1]
-    Object input;
-    if (_inShape.length == 2 && _inShape[0] == 1 && _inShape[1] == windowSize) {
-      input = [floats.toList()]; // List<List<double>>
+    // Build input tensor based on model input shape
+    final Object input;
+    if (_needsSpectrogram) {
+      // PCM → 96×64 log-mel (or MFCC), flattened
+      final feats = _frontend!.compute(floats); // len = 96*64
+      // reshape to [1,96,64,1] using nested Dart lists
+      final shaped = List.generate(96, (t) =>
+          List.generate(64, (m) => [feats[t * 64 + m]])
+      );
+      input = [shaped];
+    } else if (_inShape.length == 2 &&
+        _inShape[0] == 1 &&
+        _inShape[1] == windowSize) {
+      input = [floats.toList()]; // [1,16000]
     } else if (_inShape.length == 3 &&
         _inShape[0] == 1 &&
         _inShape[1] == windowSize &&
         _inShape[2] == 1) {
-      input = [floats.map((f) => [f]).toList()]; // List<List<List<double>>>
+      input = [floats.map((f) => [f]).toList()]; // [1,16000,1]
     } else {
       throw StateError(
-        "Unexpected input shape: $_inShape. "
-            "Expected [1,$windowSize] or [1,$windowSize,1]. "
-            "If your model is spectrogram-shaped (e.g. [1,96,64,1]), you must add a feature pipeline.",
+        "Unsupported input shape: $_inShape. "
+            "Supported: [1,$windowSize], [1,$windowSize,1], or [1,96,64,1].",
       );
     }
 
@@ -101,9 +147,8 @@ class AudioClassifier {
     final List<List<double>> output = [List.filled(numLabels, 0.0)];
     _interpreter.run(input, output);
 
-    // Get probabilities (softmax if logits)
-    List<double> probs = output[0];
-    probs = _softmaxIfNeeded(probs);
+    // Probabilities (softmax if logits)
+    List<double> probs = _softmaxIfNeeded(output[0]);
 
     // EMA smoothing over time
     probs = _ema(_emaProbs, probs, emaAlpha);
@@ -111,13 +156,10 @@ class AudioClassifier {
 
     // Periodically reset EMA to avoid stickiness
     _framesSinceReset++;
-    if (_framesSinceReset >= 24) { // ~6s if hop=250ms
+    if (_framesSinceReset >= 24) {
       _emaProbs = null;
       _framesSinceReset = 0;
     }
-
-    // DEBUG: print top-k with indices to verify label order
-    // debugDumpTopK(probs, k: 8);
 
     final int topIdx = _argmax(probs);
     return {
@@ -140,7 +182,7 @@ class AudioClassifier {
   static List<double> _softmaxIfNeeded(List<double> v) {
     final sum = v.fold<double>(0.0, (a, b) => a + b);
     final in01 = v.every((x) => x >= -1e-6 && x <= 1.000001);
-    if (in01 && (sum > 0.95 && sum < 1.05)) return v;
+    if (in01 && (sum > 0.95 && sum < 1.05)) return v; // already probs
     final m = v.reduce(math.max);
     final exps = v.map((x) => math.exp(x - m)).toList();
     final exSum = exps.fold<double>(0.0, (a, b) => a + b);

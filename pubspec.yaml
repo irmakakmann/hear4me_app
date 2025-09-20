@@ -36,6 +36,7 @@ dependencies:
 
   flutter_reactive_ble: ^5.3.1
   permission_handler: ^11.3.1
+  fftea: ^1.5.0+1
 
   # Use 0.10.3 (works with AGP 8, and is friendly with current Dart SDKs)
   tflite_flutter: ^0.10.4
