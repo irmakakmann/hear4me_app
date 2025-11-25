@@ -1,5 +1,7 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
+import 'package:hear4me/history.dart';
+import 'package:hear4me/profile.dart';
 import 'sounds.dart';
 import 'settings.dart';
 
@@ -61,8 +63,8 @@ class _MyHomePageState extends State<MyHomePage> {
     return <Widget>[
       _buildHomeContent(context, () => _onItemTapped(1)),
       const SoundsScreen(),
-      const Center(child: Text('History Screen Content', style: TextStyle(fontSize: 24))),
-      const Center(child: Text('Profile Screen Content', style: TextStyle(fontSize: 24))),
+      const HistoryScreen(),
+      const ProfileScreen(),
       const SettingsScreen(),
     ];
   }
